@@ -73,6 +73,8 @@ class MultiObjectiveMCAcquisitionFunction(AcquisitionFunction):
         model: Model,
         sampler: Optional[MCSampler] = None,
         objective: Optional[MCMultiOutputObjective] = None,
+        constraint_objective: Optional[MCMultiOutputObjective] = None,
+        constraints: Optional[List[Callable[[Tensor], Tensor]]] = None,
         X_pending: Optional[Tensor] = None,
     ) -> None:
         r"""Constructor for the MCAcquisitionFunction base class.
@@ -83,6 +85,15 @@ class MultiObjectiveMCAcquisitionFunction(AcquisitionFunction):
                 `SobolQMCNormalSampler(num_samples=128, collapse_batch_dims=True)`.
             objective: The MCMultiOutputObjective under which the samples are
                 evaluated. Defaults to `IdentityMultiOutputObjective()`.
+            constraint_objective: An MCMultiOutputObjective, which is applied to
+                the samples before evaluating constraints. Defaults to
+                `IdentityMultiOutputObjective()`.
+                Note: The objective may change the number of outcomes from `m` to `m'`,
+                in which case, the constraints must be defined accordingly.
+            constraints: A list of callables, each mapping a Tensor of dimension
+                `sample_shape x batch-shape x q x m` to a Tensor of dimension
+                `sample_shape x batch-shape x q`, where negative values imply
+                feasibility.
             X_pending:  A `m x d`-dim Tensor of `m` design points that have
                 points that have been submitted for function evaluation
                 but have not yet been evaluated.
@@ -93,12 +104,22 @@ class MultiObjectiveMCAcquisitionFunction(AcquisitionFunction):
         self.add_module("sampler", sampler)
         if objective is None:
             objective = IdentityMCMultiOutputObjective()
-        elif not isinstance(objective, MCMultiOutputObjective):
+        if constraint_objective is None:
+            if constraints is None:
+                # Setting to objective to avoid spurious errors.
+                constraint_objective = objective
+            else:
+                constraint_objective = IdentityMCMultiOutputObjective()
+        if not isinstance(objective, MCMultiOutputObjective) or not isinstance(
+            constraint_objective, MCMultiOutputObjective
+        ):
             raise UnsupportedError(
                 "Only objectives of type MCMultiOutputObjective are supported for "
                 "Multi-Objective MC acquisition functions."
             )
         self.add_module("objective", objective)
+        self.add_module("constraint_objective", constraint_objective)
+        self.constraints = constraints
         self.X_pending = None
         if X_pending is not None:
             self.set_X_pending(X_pending)
@@ -122,6 +143,7 @@ class qExpectedHypervolumeImprovement(MultiObjectiveMCAcquisitionFunction):
         partitioning: NondominatedPartitioning,
         sampler: Optional[MCSampler] = None,
         objective: Optional[MCMultiOutputObjective] = None,
+        constraint_objective: Optional[MCMultiOutputObjective] = None,
         constraints: Optional[List[Callable[[Tensor], Tensor]]] = None,
         X_pending: Optional[Tensor] = None,
         eta: float = 1e-3,
@@ -150,6 +172,11 @@ class qExpectedHypervolumeImprovement(MultiObjectiveMCAcquisitionFunction):
                 `SobolQMCNormalSampler(num_samples=128, collapse_batch_dims=True)`.
             objective: The MCMultiOutputObjective under which the samples are evaluated.
                 Defaults to `IdentityMultiOutputObjective()`.
+            constraint_objective: An MCMultiOutputObjective, which is applied to
+                the samples before evaluating constraints. Defaults to
+                `IdentityMultiOutputObjective()`.
+                Note: The objective may change the number of outcomes from `m` to `m'`,
+                in which case, the constraints must be defined accordingly.
             constraints: A list of callables, each mapping a Tensor of dimension
                 `sample_shape x batch-shape x q x m` to a Tensor of dimension
                 `sample_shape x batch-shape x q`, where negative values imply
@@ -174,9 +201,13 @@ class qExpectedHypervolumeImprovement(MultiObjectiveMCAcquisitionFunction):
             device=partitioning.pareto_Y.device,
         )
         super().__init__(
-            model=model, sampler=sampler, objective=objective, X_pending=X_pending
+            model=model,
+            sampler=sampler,
+            objective=objective,
+            constraint_objective=constraint_objective,
+            constraints=constraints,
+            X_pending=X_pending,
         )
-        self.constraints = constraints
         self.eta = eta
         self.register_buffer("ref_point", ref_point)
         cell_bounds = partitioning.get_hypercell_bounds()
@@ -211,21 +242,19 @@ class qExpectedHypervolumeImprovement(MultiObjectiveMCAcquisitionFunction):
             )
             self.q = q
 
-    def _compute_qehvi(self, samples: Tensor, X: Optional[Tensor] = None) -> Tensor:
+    def _compute_qehvi(self, obj: Tensor, constraint_obj: Tensor) -> Tensor:
         r"""Compute the expected (feasible) hypervolume improvement given MC samples.
 
         Args:
-            samples: A `n_samples x batch_shape x q x m`-dim tensor of samples.
-            X: A `batch_shape x q x d`-dim tensor of inputs.
+            obj: A `n_samples x batch_shape x q x m`-dim objective values.
+            constraint_obj: A `n_samples x batch_shape x q x m`-dim tensor of
+                objective values for use in constraints.
 
         Returns:
             A `batch_shape x (model_batch_shape)`-dim tensor of expected hypervolume
             improvement for each batch.
         """
-        q = samples.shape[-2]
-        # Note that the objective may subset the outcomes (e.g. this will usually happen
-        # if there are constraints present).
-        obj = self.objective(samples, X=X)
+        q = obj.shape[-2]
         if self.constraints is not None:
             feas_weights = torch.ones(
                 obj.shape[:-1], device=obj.device, dtype=obj.dtype
@@ -233,11 +262,11 @@ class qExpectedHypervolumeImprovement(MultiObjectiveMCAcquisitionFunction):
             feas_weights = apply_constraints_nonnegative_soft(
                 obj=feas_weights,
                 constraints=self.constraints,
-                samples=samples,
+                samples=constraint_obj,
                 eta=self.eta,
             )
         self._cache_q_subset_indices(q=q)
-        batch_shape = samples.shape[:-2]
+        batch_shape = obj.shape[:-2]
         # this is n_samples x input_batch_shape x
         areas_per_segment = torch.zeros(
             *batch_shape,
@@ -305,7 +334,9 @@ class qExpectedHypervolumeImprovement(MultiObjectiveMCAcquisitionFunction):
     def forward(self, X: Tensor) -> Tensor:
         posterior = self.model.posterior(X)
         samples = self.sampler(posterior)
-        return self._compute_qehvi(samples=samples)
+        obj = self.objective(samples, X=X)
+        constraint_obj = self.constraint_objective(samples, X=X)
+        return self._compute_qehvi(obj=obj, constraint_obj=constraint_obj)
 
 
 class qNoisyExpectedHypervolumeImprovement(qExpectedHypervolumeImprovement):
@@ -316,6 +347,7 @@ class qNoisyExpectedHypervolumeImprovement(qExpectedHypervolumeImprovement):
         X_baseline: Tensor,
         sampler: Optional[MCSampler] = None,
         objective: Optional[MCMultiOutputObjective] = None,
+        constraint_objective: Optional[MCMultiOutputObjective] = None,
         constraints: Optional[List[Callable[[Tensor], Tensor]]] = None,
         X_pending: Optional[Tensor] = None,
         eta: float = 1e-3,
@@ -351,6 +383,11 @@ class qNoisyExpectedHypervolumeImprovement(qExpectedHypervolumeImprovement):
                 computationally intensive for `m` > 2.
             objective: The MCMultiOutputObjective under which the samples are
                 evaluated. Defaults to `IdentityMultiOutputObjective()`.
+            constraint_objective: An MCMultiOutputObjective, which is applied to
+                the samples before evaluating constraints. Defaults to
+                `IdentityMultiOutputObjective()`.
+                Note: The objective may change the number of outcomes from `m` to `m'`,
+                in which case, the constraints must be defined accordingly.
             constraints: A list of callables, each mapping a Tensor of dimension
                 `sample_shape x batch-shape x q x m` to a Tensor of dimension
                 `sample_shape x batch-shape x q`, where negative values imply
@@ -385,7 +422,11 @@ class qNoisyExpectedHypervolumeImprovement(qExpectedHypervolumeImprovement):
             ref_point, dtype=X_baseline.dtype, device=X_baseline.device
         )
         super(qExpectedHypervolumeImprovement, self).__init__(
-            model=model, sampler=sampler, objective=objective
+            model=model,
+            sampler=sampler,
+            objective=objective,
+            constraint_objective=constraint_objective,
+            constraints=constraints,
         )
         if not self.sampler.collapse_batch_dims:
             raise UnsupportedError(
@@ -412,6 +453,7 @@ class qNoisyExpectedHypervolumeImprovement(qExpectedHypervolumeImprovement):
                 model=model,
                 X=X_baseline,
                 objective=objective,
+                constraint_objective=constraint_objective,
                 constraints=constraints,
                 ref_point=ref_point,
                 marginalize_dim=kwargs.get("marginalize_dim"),
@@ -419,7 +461,6 @@ class qNoisyExpectedHypervolumeImprovement(qExpectedHypervolumeImprovement):
         self.register_buffer("ref_point", ref_point)
         self.base_sampler = deepcopy(self.sampler)
 
-        self.constraints = constraints
         self.alpha = alpha
         self.eta = eta
         self.q = -1
@@ -514,10 +555,11 @@ class qNoisyExpectedHypervolumeImprovement(qExpectedHypervolumeImprovement):
                 "base_samples", self.sampler.base_samples.detach().clone()
             )
             samples = self.base_sampler(posterior)
-            obj = self.objective(samples)
+            obj = self.objective(samples, X=self.X_baseline)
             if self.constraints is not None:
+                constraint_obj = self.constraint_objective(samples, X=self.X_baseline)
                 feas = torch.stack(
-                    [c(samples) <= 0 for c in self.constraints], dim=0
+                    [c(constraint_obj) <= 0 for c in self.constraints], dim=0
                 ).all(dim=0)
         else:
             obj = torch.empty(
@@ -684,6 +726,11 @@ class qNoisyExpectedHypervolumeImprovement(qExpectedHypervolumeImprovement):
         posterior = self.model.posterior(X_full)
         q = X.shape[-2]
         self._set_sampler(q=q, posterior=posterior)
-        samples = self.sampler(posterior)[..., -q:, :]
+        samples = self.sampler(posterior)
+        obj = self.objective(samples, X=X_full)[..., -q:, :]
+        constraint_obj = self.constraint_objective(samples, X=X_full)[..., -q:, :]
         # add previous nehvi from pending points
-        return self._compute_qehvi(samples=samples) + self._prev_nehvi
+        return (
+            self._compute_qehvi(obj=obj, constraint_obj=constraint_obj)
+            + self._prev_nehvi
+        )

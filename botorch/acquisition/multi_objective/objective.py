@@ -10,7 +10,7 @@ from abc import abstractmethod
 from typing import List, Optional
 
 import torch
-from botorch.acquisition.objective import AcquisitionObjective
+from botorch.acquisition.objective import AcquisitionObjective, MCAcquisitionObjective
 from botorch.exceptions.errors import BotorchError, BotorchTensorDimensionError
 from botorch.models.transforms.outcome import Standardize
 from botorch.posteriors import GPyTorchPosterior
@@ -18,7 +18,7 @@ from botorch.utils.transforms import normalize_indices
 from torch import Tensor
 
 
-class MCMultiOutputObjective(AcquisitionObjective):
+class MCMultiOutputObjective(MCAcquisitionObjective):
     r"""Abstract base class for MC multi-output objectives."""
 
     @abstractmethod
