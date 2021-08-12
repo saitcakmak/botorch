@@ -229,6 +229,8 @@ class TestQExpectedHypervolumeImprovement(BotorchTestCase):
             self.assertIsNone(acqf.X_pending)
             acqf.set_X_pending(X)
             self.assertEqual(acqf.X_pending, X)
+            # get mm sample shape to match shape of X + X_pending
+            acqf.model._posterior._samples = torch.zeros(1, 2, 2, **tkwargs)
             res = acqf(X)
             X2 = torch.zeros(1, 1, 1, requires_grad=True, **tkwargs)
             with warnings.catch_warnings(record=True) as ws, settings.debug(True):
@@ -245,6 +247,8 @@ class TestQExpectedHypervolumeImprovement(BotorchTestCase):
                 sampler=sampler,
                 objective=IdentityMCMultiOutputObjective(),
             )
+            # get mm sample shape to match shape of X
+            acqf.model._posterior._samples = torch.zeros(1, 1, 2, **tkwargs)
             res = acqf(X)
             self.assertEqual(res.item(), 0.0)
 
@@ -917,6 +921,8 @@ class TestQNoisyExpectedHypervolumeImprovement(BotorchTestCase):
             self.assertTrue(torch.equal(acqf_pareto_Y[-2:], new_Y2))
 
             # test set X_pending with grad
+            # Get posterior samples to agree with X_pending
+            mm._posterior._samples = torch.zeros(1, 7, m, **tkwargs)
             with warnings.catch_warnings(record=True) as ws, settings.debug(True):
                 acqf.set_X_pending(
                     torch.cat([X_pending2, X_pending2], dim=0).requires_grad_(True)
@@ -1023,7 +1029,7 @@ class TestQNoisyExpectedHypervolumeImprovement(BotorchTestCase):
             acqf.set_X_pending(None)
             self.assertIsNone(acqf.X_pending)
             # test X_pending is not None on __init__
-            mm._posterior._samples = baseline_samples
+            mm._posterior._samples = torch.zeros(1, 5, m, **tkwargs)
             sampler = IIDNormalSampler(num_samples=1)
             acqf = qNoisyExpectedHypervolumeImprovement(
                 model=mm,
@@ -1290,7 +1296,8 @@ class TestQNoisyExpectedHypervolumeImprovement(BotorchTestCase):
             sampler = IIDNormalSampler(1)
             with mock.patch(no, new_callable=mock.PropertyMock) as mock_num_outputs:
                 mock_num_outputs.return_value = 2
-                mm = MockModel(MockPosterior(samples=baseline_samples))
+                # Reduce samples to same shape as X_pruned.
+                mm = MockModel(MockPosterior(samples=baseline_samples[:1]))
                 with mock.patch(prune, return_value=X_pruned) as mock_prune:
                     acqf = qNoisyExpectedHypervolumeImprovement(
                         model=mm,
