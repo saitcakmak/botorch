@@ -103,9 +103,7 @@ class TestQExpectedImprovement(BotorchTestCase):
             self.assertEqual(acqf.X_pending, X)
             mm._posterior._samples = torch.zeros(1, 2, 1, **tkwargs)
             res = acqf(X)
-            X2 = torch.zeros(
-                1, 1, 1, **tkwargs, requires_grad=True
-            )
+            X2 = torch.zeros(1, 1, 1, **tkwargs, requires_grad=True)
             with warnings.catch_warnings(record=True) as ws, settings.debug(True):
                 acqf.set_X_pending(X2)
                 self.assertEqual(acqf.X_pending, X2)
@@ -113,9 +111,7 @@ class TestQExpectedImprovement(BotorchTestCase):
                 self.assertTrue(issubclass(ws[-1].category, BotorchWarning))
 
         # test bad objective type
-        obj = ScalarizedObjective(
-            weights=torch.rand(2, **tkwargs)
-        )
+        obj = ScalarizedObjective(weights=torch.rand(2, **tkwargs))
         with self.assertRaises(UnsupportedError):
             qExpectedImprovement(model=mm, best_f=0, sampler=sampler, objective=obj)
 
@@ -776,7 +772,9 @@ class TestQUpperConfidenceBound(BotorchTestCase):
             self.assertIsNone(acqf.X_pending)
             acqf.set_X_pending(X)
             self.assertTrue(torch.equal(acqf.X_pending, X))
-            mm._posterior._samples = torch.zeros(2, 4, 1, device=self.device, dtype=dtype)
+            mm._posterior._samples = torch.zeros(
+                2, 4, 1, device=self.device, dtype=dtype
+            )
             res = acqf(X)
             X2 = torch.zeros(
                 1, 1, 1, device=self.device, dtype=dtype, requires_grad=True

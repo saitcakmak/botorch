@@ -406,9 +406,9 @@ class TestQMultiFidelityKnowledgeGradient(BotorchTestCase):
             # test valfunc_cls and valfunc_argfac
             d, p, d_prime = 4, 3, 2
             samples = torch.ones(3, 1, 1, **tkwargs)
-            mean = torch.tensor(
-                [[0.25], [0.5], [0.75]], **tkwargs
-            ).expand(n_f, 1, -1, -1)
+            mean = torch.tensor([[0.25], [0.5], [0.75]], **tkwargs).expand(
+                n_f, 1, -1, -1
+            )
             weights = torch.tensor([0.5, 1.0, 1.0], **tkwargs)
             mfm = MockModel(MockPosterior(mean=mean, samples=samples))
             X = torch.rand(n_f * d + d, d, **tkwargs)
