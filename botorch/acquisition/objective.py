@@ -17,19 +17,50 @@ from typing import Callable, List, Optional
 
 import torch
 from botorch.posteriors.gpytorch import GPyTorchPosterior, scalarize_posterior
+from botorch.posteriors.posterior import Posterior
 from botorch.utils import apply_constraints
 from torch import Tensor
 from torch.nn import Module
 
 
 class AcquisitionObjective(Module, ABC):
-    r"""Abstract base class for objectives."""
+    r"""Abstract base class for objectives.
 
+    DEPRECATED - This will be removed in the next version.
+    """
     ...
 
 
-class ScalarizedObjective(AcquisitionObjective):
-    r"""Affine objective to be used with analytic acquisition functions.
+class PosteriorTransform(Module, ABC):
+    r"""Abstract base class for objectives that transform the posterior."""
+
+    @abstractmethod
+    def evaluate(self, Y: Tensor) -> Tensor:
+        r"""Evaluate the transform on a set of outcomes.
+
+        Args:
+            Y: A `batch_shape x q x m`-dim tensor of outcomes.
+
+        Returns:
+            A `batch_shape x q' [x m']`-dim tensor of transformed outcomes.
+        """
+        pass  # pragma: no cover
+
+    @abstractmethod
+    def forward(self, posterior: Posterior) -> Posterior:
+        r"""Compute the transformed posterior.
+
+        Args:
+            posterior: The posterior to be transformed.
+
+        Returns:
+            The transformed posterior object.
+        """
+        pass  # pragma: no cover
+
+
+class ScalarizedPosteriorTransform(PosteriorTransform):
+    r"""An affine posterior transform for scalarizing multi-output posteriors.
 
     For a Gaussian posterior at a single point (`q=1`) with mean `mu` and
     covariance matrix `Sigma`, this yields a single-output posterior with mean
@@ -39,12 +70,14 @@ class ScalarizedObjective(AcquisitionObjective):
         Example for a model with two outcomes:
 
         >>> weights = torch.tensor([0.5, 0.25])
-        >>> objective = ScalarizedObjective(weights)
-        >>> EI = ExpectedImprovement(model, best_f=0.1, objective=objective)
+        >>> posterior_transform = ScalarizedPosteriorTransform(weights)
+        >>> EI = ExpectedImprovement(
+        ... model, best_f=0.1, posterior_transform=posterior_transform
+        ... )
     """
 
     def __init__(self, weights: Tensor, offset: float = 0.0) -> None:
-        r"""Affine objective.
+        r"""Affine posterior transform.
 
         Args:
             weights: A one-dimensional tensor with `m` elements representing the
@@ -58,13 +91,13 @@ class ScalarizedObjective(AcquisitionObjective):
         self.offset = offset
 
     def evaluate(self, Y: Tensor) -> Tensor:
-        r"""Evaluate the objective on a set of outcomes.
+        r"""Evaluate the transform on a set of outcomes.
 
         Args:
             Y: A `batch_shape x q x m`-dim tensor of outcomes.
 
         Returns:
-            A `batch_shape x q`-dim tensor of objective values.
+            A `batch_shape x q`-dim tensor of transformed outcomes.
         """
         return self.offset + Y @ self.weights
 
@@ -83,8 +116,26 @@ class ScalarizedObjective(AcquisitionObjective):
         )
 
 
-class MCAcquisitionObjective(AcquisitionObjective):
-    r"""Abstract base class for MC-based objectives."""
+class ScalarizedObjective(ScalarizedPosteriorTransform, AcquisitionObjective):
+    """DEPRECATED - Use ScalarizedPosteriorTransform instead."""
+
+    def __init__(self, weights: Tensor, offset: float = 0.0) -> None:
+        warnings.warn(
+            "ScalarizedObjective is deprecated and will be removed in the next "
+            "version. Use ScalarizedPosteriorTransform instead."
+        )
+        super().__init__(weights=weights, offset=offset)
+
+
+class MCAcquisitionObjective(Module, ABC):
+    r"""Abstract base class for MC-based objectives.
+
+    Args:
+        _verify_output_shape: If True and `X` is given, check that the q-batch
+            shape of the objectives agrees with that of X.
+    """
+
+    _verify_output_shape: bool = True
 
     @abstractmethod
     def forward(self, samples: Tensor, X: Optional[Tensor] = None) -> Tensor:
@@ -100,7 +151,7 @@ class MCAcquisitionObjective(AcquisitionObjective):
             Tensor: A `sample_shape x batch_shape x q`-dim Tensor of objective
             values (assuming maximization).
 
-        This method is usually not called directly, but via the objectives
+        This method is usually not called directly, but via the objectives.
 
         Example:
             >>> # `__call__` method:
@@ -108,6 +159,26 @@ class MCAcquisitionObjective(AcquisitionObjective):
             >>> outcome = mc_obj(samples)
         """
         pass  # pragma: no cover
+
+    def __call__(
+        self, samples: Tensor, X: Optional[Tensor] = None, *args, **kwargs
+    ) -> Tensor:
+        output = super().__call__(samples=samples, X=X, *args, **kwargs)
+        # q-batch dimension is at -1 for single-output objectives and at
+        # -2 for multi-output objectives.
+        q_batch_idx = -2 if output.dim() == samples.dim() else -1
+        if (
+            X is not None
+            and self._verify_output_shape
+            and output.shape[q_batch_idx] != X.shape[-2]
+        ):
+            raise RuntimeError(
+                "The q-batch shape of the objective values does not agree with "
+                f"the q-batch shape of X. Got {output.shape[q_batch_idx]} and "
+                f"{X.shape[-2]}. This may happen if you used a one-to-many input "
+                "transform but forgot to use a corresponding objective."
+            )
+        return output
 
 
 class IdentityMCObjective(MCAcquisitionObjective):
