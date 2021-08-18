@@ -57,6 +57,7 @@ def prune_inferior_points_multi_objective(
     X: Tensor,
     ref_point: Tensor,
     objective: Optional[MCMultiOutputObjective] = None,
+    constraint_objective: Optional[MCMultiOutputObjective] = None,
     constraints: Optional[List[Callable[[Tensor], Tensor]]] = None,
     num_samples: int = 2048,
     max_frac: float = 1.0,
@@ -77,6 +78,8 @@ def prune_inferior_points_multi_objective(
             supported.
         ref_point: The reference point.
         objective: The objective under which to evaluate the posterior.
+        constraint_objective: The objective under which to evaluate the posterior
+            for use with constraints.
         constraints: A list of callables, each mapping a Tensor of dimension
             `sample_shape x batch-shape x q x m` to a Tensor of dimension
             `sample_shape x batch-shape x q`, where negative values imply
@@ -133,7 +136,14 @@ def prune_inferior_points_multi_objective(
                 " prune_inferior_points_multi_objective."
             )
     if constraints is not None:
-        infeas = torch.stack([c(samples) > 0 for c in constraints], dim=0).any(dim=0)
+        constraint_obj = (
+            constraint_objective(samples)
+            if constraint_objective is not None
+            else samples
+        )
+        infeas = torch.stack([c(constraint_obj) > 0 for c in constraints], dim=0).any(
+            dim=0
+        )
         if infeas.ndim == 3 and marginalize_dim is not None:
             # make sure marginalize_dim is not negative
             if marginalize_dim < 0:

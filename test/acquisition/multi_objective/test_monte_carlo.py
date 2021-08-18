@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import warnings
+from contextlib import ExitStack
 from copy import deepcopy
 from itertools import product
 from unittest import mock
@@ -40,8 +41,11 @@ class DummyMultiObjectiveMCAcquisitionFunction(MultiObjectiveMCAcquisitionFuncti
 
 
 class DummyMCMultiOutputObjective(MCMultiOutputObjective):
-    def forward(self, samples):
-        pass
+    def forward(self, samples, X=None):
+        if X is not None:
+            return samples[..., : X.shape[-2], :]
+        else:
+            return samples
 
 
 class TestMultiObjectiveMCAcquisitionFunction(BotorchTestCase):
@@ -75,6 +79,11 @@ class TestMultiObjectiveMCAcquisitionFunction(BotorchTestCase):
         with self.assertRaises(UnsupportedError):
             acqf = DummyMultiObjectiveMCAcquisitionFunction(
                 model=mm, objective=IdentityMCObjective()
+            )
+        # unsupported constraint objective
+        with self.assertRaises(UnsupportedError):
+            acqf = DummyMultiObjectiveMCAcquisitionFunction(
+                model=mm, constraint_objective=IdentityMCObjective()
             )
 
 
@@ -220,6 +229,8 @@ class TestQExpectedHypervolumeImprovement(BotorchTestCase):
             self.assertIsNone(acqf.X_pending)
             acqf.set_X_pending(X)
             self.assertEqual(acqf.X_pending, X)
+            # get mm sample shape to match shape of X + X_pending
+            acqf.model._posterior._samples = torch.zeros(1, 2, 2, **tkwargs)
             res = acqf(X)
             X2 = torch.zeros(1, 1, 1, requires_grad=True, **tkwargs)
             with warnings.catch_warnings(record=True) as ws, settings.debug(True):
@@ -236,6 +247,8 @@ class TestQExpectedHypervolumeImprovement(BotorchTestCase):
                 sampler=sampler,
                 objective=IdentityMCMultiOutputObjective(),
             )
+            # get mm sample shape to match shape of X
+            acqf.model._posterior._samples = torch.zeros(1, 1, 2, **tkwargs)
             res = acqf(X)
             self.assertEqual(res.item(), 0.0)
 
@@ -908,6 +921,8 @@ class TestQNoisyExpectedHypervolumeImprovement(BotorchTestCase):
             self.assertTrue(torch.equal(acqf_pareto_Y[-2:], new_Y2))
 
             # test set X_pending with grad
+            # Get posterior samples to agree with X_pending
+            mm._posterior._samples = torch.zeros(1, 7, m, **tkwargs)
             with warnings.catch_warnings(record=True) as ws, settings.debug(True):
                 acqf.set_X_pending(
                     torch.cat([X_pending2, X_pending2], dim=0).requires_grad_(True)
@@ -1014,7 +1029,7 @@ class TestQNoisyExpectedHypervolumeImprovement(BotorchTestCase):
             acqf.set_X_pending(None)
             self.assertIsNone(acqf.X_pending)
             # test X_pending is not None on __init__
-            mm._posterior._samples = baseline_samples
+            mm._posterior._samples = torch.zeros(1, 5, m, **tkwargs)
             sampler = IIDNormalSampler(num_samples=1)
             acqf = qNoisyExpectedHypervolumeImprovement(
                 model=mm,
@@ -1028,6 +1043,72 @@ class TestQNoisyExpectedHypervolumeImprovement(BotorchTestCase):
             self.assertTrue(torch.equal(X_baseline, acqf._X_baseline))
             self.assertTrue(torch.equal(acqf.X_baseline[:-2], acqf._X_baseline))
             self.assertTrue(torch.equal(acqf.X_baseline[-2:], X_pending2))
+
+            # test proper use of constraint objective
+            mm.input_transform = True  # trigger hasattr check
+            n_w = 2
+            X_test = torch.rand(1, 1, **tkwargs)
+            X_full_q_batch_size = X_test.shape[-2] + X_baseline.shape[-2]
+            mm._posterior._samples = torch.rand(X_full_q_batch_size * n_w, m, **tkwargs)
+
+            def dummy_compute_qehvi(acqf, obj, constraint_obj):
+                return samples.sum(dim=[-1, -2])
+
+            with ExitStack() as es:
+                es.enter_context(
+                    mock.patch.object(
+                        qNoisyExpectedHypervolumeImprovement,
+                        "_compute_qehvi",
+                        dummy_compute_qehvi,
+                    )
+                )
+                es.enter_context(
+                    mock.patch.object(
+                        qNoisyExpectedHypervolumeImprovement,
+                        "_set_cell_bounds",
+                        return_value=None,
+                    )
+                )
+                # Should get an error if no objective / constraint obj is specified.
+                acqf = qNoisyExpectedHypervolumeImprovement(
+                    model=mm,
+                    ref_point=ref_point,
+                    X_baseline=X_baseline,
+                    sampler=sampler,
+                )
+                with self.assertRaises(RuntimeError):
+                    acqf(X_test)
+                # No error if no constraint is specified and objective is given.
+                acqf = qNoisyExpectedHypervolumeImprovement(
+                    model=mm,
+                    ref_point=ref_point,
+                    objective=DummyMCMultiOutputObjective(),
+                    X_baseline=X_baseline,
+                    sampler=sampler,
+                )
+                acqf(X_test)
+                # Error if constraint is given but no constraint_objective is given.
+                acqf = qNoisyExpectedHypervolumeImprovement(
+                    model=mm,
+                    ref_point=ref_point,
+                    objective=DummyMCMultiOutputObjective(),
+                    constraints=[lambda Z: -100.0 * torch.ones_like(Z[..., -1])],
+                    X_baseline=X_baseline,
+                    sampler=sampler,
+                )
+                with self.assertRaises(RuntimeError):
+                    acqf(X_test)
+                # No error if both are given
+                acqf = qNoisyExpectedHypervolumeImprovement(
+                    model=mm,
+                    ref_point=ref_point,
+                    objective=DummyMCMultiOutputObjective(),
+                    constraint_objective=DummyMCMultiOutputObjective(),
+                    constraints=[lambda Z: -100.0 * torch.ones_like(Z[..., -1])],
+                    X_baseline=X_baseline,
+                    sampler=sampler,
+                )
+                acqf(X_test)
 
     def test_constrained_q_noisy_expected_hypervolume_improvement(self):
         # TODO: improve tests with constraints
@@ -1215,7 +1296,8 @@ class TestQNoisyExpectedHypervolumeImprovement(BotorchTestCase):
             sampler = IIDNormalSampler(1)
             with mock.patch(no, new_callable=mock.PropertyMock) as mock_num_outputs:
                 mock_num_outputs.return_value = 2
-                mm = MockModel(MockPosterior(samples=baseline_samples))
+                # Reduce samples to same shape as X_pruned.
+                mm = MockModel(MockPosterior(samples=baseline_samples[:1]))
                 with mock.patch(prune, return_value=X_pruned) as mock_prune:
                     acqf = qNoisyExpectedHypervolumeImprovement(
                         model=mm,
