@@ -8,7 +8,7 @@ r"""
 A registry of helpers for generating inputs to acquisition function
 constructors programmatically from a consistent input format.
 """
-
+import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 import torch
@@ -30,18 +30,22 @@ from botorch.acquisition.monte_carlo import (
 )
 from botorch.acquisition.multi_objective import (
     ExpectedHypervolumeImprovement,
+    MCMultiOutputObjective,
     qExpectedHypervolumeImprovement,
     qNoisyExpectedHypervolumeImprovement,
 )
 from botorch.acquisition.multi_objective.objective import (
+    AnalyticMultiOutputObjective,
     IdentityAnalyticMultiOutputObjective,
     IdentityMCMultiOutputObjective,
 )
 from botorch.acquisition.multi_objective.utils import get_default_partitioning_alpha
 from botorch.acquisition.objective import (
+    MCAcquisitionObjective,
     AcquisitionObjective,
     IdentityMCObjective,
-    ScalarizedObjective,
+    PosteriorTransform,
+    ScalarizedPosteriorTransform,
 )
 from botorch.exceptions.errors import UnsupportedError
 from botorch.models.model import Model
@@ -114,6 +118,35 @@ def _register_acqf_input_constructor(
     ACQF_INPUT_CONSTRUCTOR_REGISTRY[acqf_cls] = input_constructor
 
 
+# ------------------------- Deprecation Helpers ------------------------- #
+
+
+def _deprecate_objective_arg(
+    posterior_transform: Optional[PosteriorTransform] = None,
+    objective: Optional[AcquisitionObjective] = None,
+) -> Optional[PosteriorTransform]:
+    if posterior_transform is not None:
+        if objective is None:
+            return posterior_transform
+        else:
+            raise RuntimeError(
+                "Got both a non-MC objective (DEPRECATED) and a posterior "
+                "transform. Use only a posterior transform instead."
+            )
+    elif objective is not None:
+        warnings.warn(
+            "The `objective` argument to AnalyticAcquisitionFunctions is deprecated "
+            "and will be removed in the next version. Use `posterior_transform` "
+            "instead.",
+            DeprecationWarning,
+        )
+        return ScalarizedPosteriorTransform(
+            weights=objective.weights, offset=objective.offset
+        )
+    else:
+        return None
+
+
 # --------------------- Input argument constructors --------------------- #
 
 
@@ -121,7 +154,7 @@ def _register_acqf_input_constructor(
 def construct_inputs_analytic_base(
     model: Model,
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     r"""Construct kwargs for basic analytic acquisition functions.
@@ -130,19 +163,26 @@ def construct_inputs_analytic_base(
         model: The model to be used in the acquisition function.
         training_data: A TrainingData object contraining the model's
             training data. `best_f` is extracted from here.
-        objective: The objective to in the acquisition function.
+        posterior_transform: The posterior transform to be used in the
+            acquisition function.
 
     Returns:
         A dict mapping kwarg names of the constructor to values.
     """
-    return {"model": model, "objective": objective}
+    return {
+        "model": model,
+        "posterior_transform": _deprecate_objective_arg(
+            posterior_transform=posterior_transform,
+            objective=kwargs.get("objective", None),
+        ),
+    }
 
 
 @acqf_input_constructor(ExpectedImprovement, ProbabilityOfImprovement)
 def construct_inputs_best_f(
     model: Model,
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
     maximize: bool = True,
     **kwargs: Any,
 ) -> Dict[str, Any]:
@@ -152,17 +192,26 @@ def construct_inputs_best_f(
         model: The model to be used in the acquisition function.
         training_data: A TrainingData object contraining the model's
             training data. `best_f` is extracted from here.
-        objective: The objective to in the acquisition function.
+        posterior_transform: The posterior transform to be used in the
+            acquisition function.
         maximize: If True, consider the problem a maximization problem.
 
     Returns:
         A dict mapping kwarg names of the constructor to values.
     """
     base_inputs = construct_inputs_analytic_base(
-        model=model, training_data=training_data, objective=objective
+        model=model,
+        training_data=training_data,
+        posterior_transform=posterior_transform,
+        **kwargs,
     )
     best_f = kwargs.get(
-        "best_f", get_best_f_analytic(training_data=training_data, objective=objective)
+        "best_f",
+        get_best_f_analytic(
+            training_data=training_data,
+            objective=kwargs.get("objective", None),
+            posterior_transform=posterior_transform,
+        ),
     )
     return {**base_inputs, "best_f": best_f, "maximize": maximize}
 
@@ -171,7 +220,7 @@ def construct_inputs_best_f(
 def construct_inputs_ucb(
     model: Model,
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
     beta: Union[float, Tensor] = 0.2,
     maximize: bool = True,
     **kwargs: Any,
@@ -182,7 +231,8 @@ def construct_inputs_ucb(
         model: The model to be used in the acquisition function.
         training_data: A TrainingData object contraining the model's
             training data. `best_f` is extracted from here.
-        objective: The objective to in the acquisition function.
+        posterior_transform: The posterior transform to be used in the
+            acquisition function.
         beta: Either a scalar or a one-dim tensor with `b` elements (batch mode)
             representing the trade-off parameter between mean and covariance
         maximize: If True, consider the problem a maximization problem.
@@ -191,7 +241,10 @@ def construct_inputs_ucb(
         A dict mapping kwarg names of the constructor to values.
     """
     base_inputs = construct_inputs_analytic_base(
-        model=model, training_data=training_data, objective=objective
+        model=model,
+        training_data=training_data,
+        posterior_transform=posterior_transform,
+        **kwargs,
     )
     return {**base_inputs, "beta": beta, "maximize": maximize}
 
@@ -269,7 +322,8 @@ def construct_inputs_noisy_ei(
 def construct_inputs_mc_base(
     model: Model,
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    objective: Optional[MCAcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
     X_pending: Optional[Tensor] = None,
     sampler: Optional[MCSampler] = None,
     **kwargs: Any,
@@ -281,7 +335,9 @@ def construct_inputs_mc_base(
         training_data: A TrainingData object contraining the model's
             training data. Used e.g. to extract inputs such as `best_f`
             for expected improvement acquisition functions.
-        objective: The objective to in the acquisition function.
+        objective: The objective to be used in the acquisition function.
+        posterior_transform: The posterior transform to be used in the
+            acquisition function.
         X_pending: A `batch_shape, m x d`-dim Tensor of `m` design points
             that have points that have been submitted for function evaluation
             but have not yet been evaluated.
@@ -294,6 +350,7 @@ def construct_inputs_mc_base(
     return {
         "model": model,
         "objective": objective,
+        "posterior_transform": posterior_transform,
         "X_pending": X_pending,
         "sampler": sampler,
     }
@@ -303,7 +360,8 @@ def construct_inputs_mc_base(
 def construct_inputs_qEI(
     model: Model,
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    objective: Optional[MCAcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
     X_pending: Optional[Tensor] = None,
     sampler: Optional[MCSampler] = None,
     **kwargs: Any,
@@ -315,7 +373,9 @@ def construct_inputs_qEI(
         training_data: A TrainingData object contraining the model's
             training data. Used e.g. to extract inputs such as `best_f`
             for expected improvement acquisition functions.
-        objective: The objective to in the acquisition function.
+        objective: The objective to be used in the acquisition function.
+        posterior_transform: The posterior transform to be used in the
+            acquisition function.
         X_pending: A `m x d`-dim Tensor of `m` design points that have been
             submitted for function evaluation but have not yet been evaluated.
             Concatenated into X upon forward call.
@@ -329,13 +389,19 @@ def construct_inputs_qEI(
         model=model,
         training_data=training_data,
         objective=objective,
+        posterior_transform=posterior_transform,
         sampler=sampler,
         X_pending=X_pending,
     )
     # TODO: Dedup handling of this here and in the constructor (maybe via a
     # shared classmethod doing this)
     best_f = kwargs.get(
-        "best_f", get_best_f_mc(training_data=training_data, objective=objective)
+        "best_f",
+        get_best_f_mc(
+            training_data=training_data,
+            objective=objective,
+            posterior_transform=posterior_transform,
+        ),
     )
     return {**base_inputs, "best_f": best_f}
 
@@ -344,7 +410,8 @@ def construct_inputs_qEI(
 def construct_inputs_qNEI(
     model: Model,
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    objective: Optional[MCAcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
     X_pending: Optional[Tensor] = None,
     sampler: Optional[MCSampler] = None,
     X_baseline: Optional[Tensor] = None,
@@ -359,7 +426,9 @@ def construct_inputs_qNEI(
             training data. Used e.g. to extract inputs such as `best_f`
             for expected improvement acquisition functions. Only block-
             design training data currently supported.
-        objective: The objective to in the acquisition function.
+        objective: The objective to be used in the acquisition function.
+        posterior_transform: The posterior transform to be used in the
+            acquisition function.
         X_pending: A `m x d`-dim Tensor of `m` design points that have been
             submitted for function evaluation but have not yet been evaluated.
             Concatenated into X upon forward call.
@@ -379,6 +448,7 @@ def construct_inputs_qNEI(
         model=model,
         training_data=training_data,
         objective=objective,
+        posterior_transform=posterior_transform,
         sampler=sampler,
         X_pending=X_pending,
     )
@@ -397,7 +467,8 @@ def construct_inputs_qNEI(
 def construct_inputs_qPI(
     model: Model,
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    objective: Optional[MCAcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
     X_pending: Optional[Tensor] = None,
     sampler: Optional[MCSampler] = None,
     tau: float = 1e-3,
@@ -410,7 +481,9 @@ def construct_inputs_qPI(
         training_data: A TrainingData object contraining the model's
             training data. Used e.g. to extract inputs such as `best_f`
             for expected improvement acquisition functions.
-        objective: The objective to in the acquisition function.
+        objective: The objective to be used in the acquisition function.
+        posterior_transform: The posterior transform to be used in the
+            acquisition function.
         X_pending: A `m x d`-dim Tensor of `m` design points that have been
             submitted for function evaluation but have not yet been evaluated.
             Concatenated into X upon forward call.
@@ -428,6 +501,7 @@ def construct_inputs_qPI(
         model=model,
         training_data=training_data,
         objective=objective,
+        posterior_transform=posterior_transform,
         sampler=sampler,
         X_pending=X_pending,
     )
@@ -441,7 +515,8 @@ def construct_inputs_qPI(
 def construct_inputs_qUCB(
     model: Model,
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    objective: Optional[MCAcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
     X_pending: Optional[Tensor] = None,
     sampler: Optional[MCSampler] = None,
     beta: float = 0.2,
@@ -454,7 +529,9 @@ def construct_inputs_qUCB(
         training_data: A TrainingData object contraining the model's
             training data. Used e.g. to extract inputs such as `best_f`
             for expected improvement acquisition functions.
-        objective: The objective to in the acquisition function.
+        objective: The objective to be used in the acquisition function.
+        posterior_transform: The posterior transform to be used in the
+            acquisition function.
         X_pending: A `m x d`-dim Tensor of `m` design points that have been
             submitted for function evaluation but have not yet been evaluated.
             Concatenated into X upon forward call.
@@ -469,6 +546,7 @@ def construct_inputs_qUCB(
         model=model,
         training_data=training_data,
         objective=objective,
+        posterior_transform=posterior_transform,
         sampler=sampler,
         X_pending=X_pending,
     )
@@ -489,7 +567,7 @@ def construct_inputs_EHVI(
     model: Model,
     training_data: TrainingData,
     objective_thresholds: Tensor,
-    objective: Optional[AcquisitionObjective] = None,
+    objective: Optional[AnalyticMultiOutputObjective] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     r"""Construct kwargs for `ExpectedHypervolumeImprovement` constructor."""
@@ -539,7 +617,7 @@ def construct_inputs_qEHVI(
     model: Model,
     training_data: TrainingData,
     objective_thresholds: Tensor,
-    objective: Optional[AcquisitionObjective] = None,
+    objective: Optional[MCMultiOutputObjective] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     r"""Construct kwargs for `qExpectedHypervolumeImprovement` constructor."""
@@ -593,7 +671,7 @@ def construct_inputs_qNEHVI(
     model: Model,
     training_data: TrainingData,
     objective_thresholds: Tensor,
-    objective: Optional[AcquisitionObjective] = None,
+    objective: Optional[MCMultiOutputObjective] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     r"""Construct kwargs for `qNoisyExpectedHypervolumeImprovement` constructor."""
@@ -633,13 +711,17 @@ def construct_inputs_qNEHVI(
 
 def get_best_f_analytic(
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
+    **kwargs,
 ) -> Tensor:
     if not training_data.is_block_design:
         raise NotImplementedError("Currently only block designs are supported.")
     Y = training_data.Y
-    if isinstance(objective, ScalarizedObjective):
-        return objective.evaluate(Y).max(-1).values
+    posterior_transform = _deprecate_objective_arg(
+        posterior_transform=posterior_transform, objective=kwargs.get("objective", None)
+    )
+    if posterior_transform is not None:
+        return posterior_transform.evaluate(Y).max(-1).values
     if Y.shape[-1] > 1:
         raise NotImplementedError
     return Y.max(-2).values.squeeze(-1)
@@ -647,13 +729,27 @@ def get_best_f_analytic(
 
 def get_best_f_mc(
     training_data: TrainingData,
-    objective: Optional[AcquisitionObjective] = None,
+    objective: Optional[MCAcquisitionObjective] = None,
+    posterior_transform: Optional[PosteriorTransform] = None,
 ) -> Tensor:
     if not training_data.is_block_design:
         raise NotImplementedError("Currently only block designs are supported.")
     Y = training_data.Y
+    posterior_transform = _deprecate_objective_arg(
+        posterior_transform=posterior_transform,
+        objective=objective
+        if not isinstance(objective, MCAcquisitionObjective)
+        else None,
+    )
+    if posterior_transform is not None:
+        # retain the original tensor dimension since objective expects explicit
+        # output dimension.
+        Y_dim = Y.dim()
+        Y = posterior_transform.evaluate(Y)
+        if Y.dim() < Y_dim:
+            Y = Y.unsqueeze(-1)
     if objective is None:
         if Y.shape[-1] > 1:
             raise UnsupportedError
         objective = IdentityMCObjective()
-    return objective(training_data.Y).max(-1).values
+    return objective(Y).max(-1).values

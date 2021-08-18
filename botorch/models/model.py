@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 import torch
 from botorch import settings
@@ -45,6 +45,7 @@ class Model(Module, ABC):
         X: Tensor,
         output_indices: Optional[List[int]] = None,
         observation_noise: bool = False,
+        posterior_transform: Optional[Callable[[Posterior], Posterior]] = None,
         **kwargs: Any,
     ) -> Posterior:
         r"""Computes the posterior over model outputs at the provided points.
@@ -63,6 +64,7 @@ class Model(Module, ABC):
                 model's outputs are required for optimization. If omitted,
                 computes the posterior over all model outputs.
             observation_noise: If True, add observation noise to the posterior.
+            posterior_transform: An optional PosteriorTransform.
 
         Returns:
             A `Posterior` object, representing a batch of `b` joint distributions
