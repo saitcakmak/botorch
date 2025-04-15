@@ -35,6 +35,7 @@ from botorch.optim.initializers import (
     gen_one_shot_kg_initial_conditions,
     TGenInitialConditions,
 )
+from botorch.optim.parameter_constraints import evaluate_feasibility
 from botorch.optim.stopping import ExpMAStoppingCriterion
 from torch import Tensor
 
@@ -116,7 +117,10 @@ class OptimizeAcqfInputs:
                     f"shape is {batch_initial_conditions_shape}."
                 )
 
-            if len(batch_initial_conditions_shape) == 2:
+            if (
+                len(batch_initial_conditions_shape) == 2
+                and self.raw_samples is not None
+            ):
                 warnings.warn(
                     "If using a 2-dim `batch_initial_conditions` botorch will "
                     "default to old behavior of ignoring `num_restarts` and just "
@@ -132,6 +136,7 @@ class OptimizeAcqfInputs:
                 len(batch_initial_conditions_shape) == 3
                 and batch_initial_conditions_shape[0] < self.num_restarts
                 and batch_initial_conditions_shape[-2] != self.q
+                and self.raw_samples is not None
             ):
                 warnings.warn(
                     "If using a 3-dim `batch_initial_conditions` where the "
@@ -350,6 +355,15 @@ def _optimize_acqf_batch(opt_inputs: OptimizeAcqfInputs) -> tuple[Tensor, Tensor
         ),
     )
 
+    gen_kwargs = {}
+    for constraint_name in [
+        "inequality_constraints",
+        "equality_constraints",
+        "nonlinear_inequality_constraints",
+    ]:
+        if (constraint := getattr(opt_inputs, constraint_name)) is not None:
+            gen_kwargs[constraint_name] = constraint
+
     def _optimize_batch_candidates() -> tuple[Tensor, Tensor, list[Warning]]:
         batch_candidates_list: list[Tensor] = []
         batch_acq_values_list: list[Tensor] = []
@@ -362,21 +376,9 @@ def _optimize_acqf_batch(opt_inputs: OptimizeAcqfInputs) -> tuple[Tensor, Tensor
         )
 
         bounds = opt_inputs.bounds
-        gen_kwargs: dict[str, Any] = {
-            "lower_bounds": None if bounds[0].isinf().all() else bounds[0],
-            "upper_bounds": None if bounds[1].isinf().all() else bounds[1],
-            "options": {k: v for k, v in options.items() if k not in INIT_OPTION_KEYS},
-            "fixed_features": opt_inputs.fixed_features,
-            "timeout_sec": timeout_sec,
-        }
-
-        for constraint_name in [
-            "inequality_constraints",
-            "equality_constraints",
-            "nonlinear_inequality_constraints",
-        ]:
-            if (constraint := getattr(opt_inputs, constraint_name)) is not None:
-                gen_kwargs[constraint_name] = constraint
+        lower_bounds = None if bounds[0].isinf().all() else bounds[0]
+        upper_bounds = None if bounds[1].isinf().all() else bounds[1]
+        gen_options = {k: v for k, v in options.items() if k not in INIT_OPTION_KEYS}
 
         for i, batched_ics_ in enumerate(batched_ics):
             # optimize using random restart optimization
@@ -386,7 +388,14 @@ def _optimize_acqf_batch(opt_inputs: OptimizeAcqfInputs) -> tuple[Tensor, Tensor
                     batch_candidates_curr,
                     batch_acq_values_curr,
                 ) = opt_inputs.gen_candidates(
-                    batched_ics_, opt_inputs.acq_function, **gen_kwargs
+                    batched_ics_,
+                    opt_inputs.acq_function,
+                    lower_bounds=lower_bounds,
+                    upper_bounds=upper_bounds,
+                    options=gen_options,
+                    fixed_features=opt_inputs.fixed_features,
+                    timeout_sec=timeout_sec,
+                    **gen_kwargs,
                 )
             opt_warnings += ws
             batch_candidates_list.append(batch_candidates_curr)
@@ -463,7 +472,27 @@ def _optimize_acqf_batch(opt_inputs: OptimizeAcqfInputs) -> tuple[Tensor, Tensor
             ]
             batch_acq_values = torch.cat(acq_values_list, dim=0)
 
+    # SLSQP can sometimes fail to produce a feasible candidate. Check for
+    # feasibility and error out if necessary.
+    is_feasible = evaluate_feasibility(
+        X=batch_candidates,
+        inequality_constraints=gen_kwargs.get("inequality_constraints"),
+        equality_constraints=gen_kwargs.get("equality_constraints"),
+        nonlinear_inequality_constraints=gen_kwargs.get(
+            "nonlinear_inequality_constraints"
+        ),
+    )
+    infeasible = ~is_feasible
+    if (opt_inputs.return_best_only and (not is_feasible.any())) or infeasible.all():
+        raise CandidateGenerationError(
+            f"The optimizer produced infeasible candidates. "
+            f"{(~is_feasible).sum().item()} out of {is_feasible.numel()} batches "
+            "of candidates were infeasible. Please make sure the constraints are "
+            "satisfiable and relax them if needed. "
+        )
     if opt_inputs.return_best_only:
+        # filter for feasible candidates
+        batch_acq_values[infeasible] = -float("inf")
         best = torch.argmax(batch_acq_values.view(-1), dim=0)
         batch_candidates = batch_candidates[best]
         batch_acq_values = batch_acq_values[best]
@@ -624,7 +653,7 @@ def optimize_acqf(
         retry_on_optimization_warning=retry_on_optimization_warning,
         ic_gen_kwargs=ic_gen_kwargs,
     )
-    return _optimize_acqf(opt_acqf_inputs)
+    return _optimize_acqf(opt_inputs=opt_acqf_inputs)
 
 
 def _optimize_acqf(opt_inputs: OptimizeAcqfInputs) -> tuple[Tensor, Tensor]:
@@ -1023,7 +1052,7 @@ def optimize_acqf_mixed(
 
     if isinstance(acq_function, OneShotAcquisitionFunction):
         if not hasattr(acq_function, "evaluate") and q > 1:
-            raise ValueError(
+            raise UnsupportedError(
                 "`OneShotAcquisitionFunction`s that do not implement `evaluate` "
                 "are currently not supported when `q > 1`. This is needed to "
                 "compute the joint acquisition value."
@@ -1434,7 +1463,7 @@ def optimize_acqf_discrete_local_search(
         X_avoid = torch.zeros(0, dim, device=device, dtype=dtype)
 
     inequality_constraints = inequality_constraints or []
-    for i in range(q):
+    for _ in range(q):
         # generate some starting points
         X0 = _gen_starting_points_local_search(
             discrete_choices=discrete_choices,
@@ -1466,7 +1495,11 @@ def optimize_acqf_discrete_local_search(
                 if len(X_loc) == 0:
                     break
                 with torch.no_grad():
-                    acqval_loc = acq_function(X_loc.unsqueeze(1))
+                    acqval_loc = _split_batch_eval_acqf(
+                        acq_function=acq_function,
+                        X=X_loc.unsqueeze(1),
+                        max_batch_size=max_batch_size,
+                    )
                 # break if no neighbor is better than the current point (local optimum)
                 if acqval_loc.max() <= curr_acqval:
                     break

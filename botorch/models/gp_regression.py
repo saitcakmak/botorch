@@ -116,6 +116,9 @@ class SingleTaskGP(BatchedMultiOutputGPyTorchModel, ExactGP, FantasizeMixin):
         ... )
     """
 
+    train_targets: Tensor
+    train_inputs: tuple[Tensor]
+
     def __init__(
         self,
         train_X: Tensor,
@@ -160,7 +163,9 @@ class SingleTaskGP(BatchedMultiOutputGPyTorchModel, ExactGP, FantasizeMixin):
                 X=train_X, input_transform=input_transform
             )
         if outcome_transform is not None:
-            train_Y, train_Yvar = outcome_transform(train_Y, train_Yvar)
+            train_Y, train_Yvar = outcome_transform(
+                Y=train_Y, Yvar=train_Yvar, X=transformed_X
+            )
         # Validate again after applying the transforms
         self._validate_tensor_args(X=transformed_X, Y=train_Y, Yvar=train_Yvar)
         ignore_X_dims = getattr(self, "_ignore_X_dims_scaling_check", None)
@@ -169,6 +174,7 @@ class SingleTaskGP(BatchedMultiOutputGPyTorchModel, ExactGP, FantasizeMixin):
             train_Y=train_Y,
             train_Yvar=train_Yvar,
             ignore_X_dims=ignore_X_dims,
+            check_nans_only=covar_module is not None,
         )
         self._set_dimensions(train_X=train_X, train_Y=train_Y)
         train_X, train_Y, train_Yvar = self._transform_tensor_args(

@@ -46,7 +46,6 @@ from botorch.models import ModelListGP, SingleTaskGP
 from botorch.sampling.normal import IIDNormalSampler, SobolQMCNormalSampler
 from botorch.utils.low_rank import sample_cached_cholesky
 from botorch.utils.testing import BotorchTestCase, MockModel, MockPosterior
-
 from botorch.utils.transforms import standardize
 from torch import Tensor
 
@@ -131,8 +130,10 @@ class TestQLogExpectedImprovement(BotorchTestCase):
                 self.assertIn(k, acqf._modules)
                 self.assertIn(k, log_acqf._modules)
 
-            res = acqf(X).item()
-            self.assertEqual(res, 0.0)
+            res = acqf(X)
+            self.assertEqual(res.dtype, dtype)
+            self.assertEqual(res.device.type, self.device.type)
+            self.assertEqual(res.item(), 0.0)
             exp_log_res = log_acqf(X).exp().item()
             # Due to the smooth approximation, the value at zero should be close to, but
             # not exactly zero, and upper-bounded by the tau hyperparameter.
@@ -403,6 +404,7 @@ class TestQLogNoisyExpectedImprovement(BotorchTestCase):
                 "sampler": sampler,
                 "prune_baseline": False,
                 "cache_root": False,
+                "incremental": False,
             }
             # copy for log version
             log_acqf = qLogNoisyExpectedImprovement(**kwargs)
@@ -420,6 +422,40 @@ class TestQLogNoisyExpectedImprovement(BotorchTestCase):
                 log_acqf.set_X_pending(X2)
             self.assertEqual(log_acqf.X_pending, X2)
             self.assertEqual(sum(issubclass(w.category, BotorchWarning) for w in ws), 1)
+
+            # test incremental
+            # Check that adding a pending point is equivalent to adding a point to
+            # X_baseline
+            for cache_root in (True, False):
+                kwargs = {
+                    "model": mm_noisy_pending,
+                    "X_baseline": X_baseline,
+                    "sampler": sampler,
+                    "prune_baseline": False,
+                    "cache_root": cache_root,
+                    "incremental": True,
+                }
+                log_acqf = qLogNoisyExpectedImprovement(**kwargs)
+                log_acqf.set_X_pending(X)
+                self.assertIsNone(log_acqf.X_pending)
+                self.assertTrue(
+                    torch.equal(log_acqf.X_baseline, torch.cat([X_baseline, X], dim=0))
+                )
+                af_val1 = log_acqf(X2)
+                kwargs = {
+                    "model": mm_noisy_pending,
+                    "X_baseline": torch.cat([X_baseline, X], dim=-2),
+                    "sampler": sampler,
+                    "prune_baseline": False,
+                    "cache_root": cache_root,
+                    "incremental": False,
+                }
+                log_acqf2 = qLogNoisyExpectedImprovement(**kwargs)
+                af_val2 = log_acqf2(X2)
+                self.assertAllClose(af_val1.item(), af_val2.item())
+            # test reseting X_pending
+            log_acqf.set_X_pending(None)
+            self.assertTrue(torch.equal(log_acqf.X_baseline, X_baseline))
 
     def test_q_noisy_expected_improvement_batch(self):
         for dtype in (torch.float, torch.double):

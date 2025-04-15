@@ -31,6 +31,7 @@ from botorch.acquisition.analytic import (
 from botorch.acquisition.bayesian_active_learning import (
     qBayesianActiveLearningByDisagreement,
 )
+from botorch.acquisition.cached_cholesky import supports_cache_root
 from botorch.acquisition.cost_aware import InverseCostWeightedUtility
 from botorch.acquisition.fixed_feature import FixedFeatureAcquisitionFunction
 from botorch.acquisition.joint_entropy_search import qJointEntropySearch
@@ -644,12 +645,13 @@ def construct_inputs_qLogNEI(
     sampler: MCSampler | None = None,
     X_baseline: Tensor | None = None,
     prune_baseline: bool | None = True,
-    cache_root: bool | None = True,
+    cache_root: bool | None = None,
     constraints: list[Callable[[Tensor], Tensor]] | None = None,
     eta: Tensor | float = 1e-3,
     fat: bool = True,
     tau_max: float = TAU_MAX,
     tau_relu: float = TAU_RELU,
+    incremental: bool = True,
 ):
     r"""Construct kwargs for the `qLogNoisyExpectedImprovement` constructor.
 
@@ -684,10 +686,15 @@ def construct_inputs_qLogNEI(
             approximations to max.
         tau_relu: Temperature parameter controlling the sharpness of the smooth
             approximations to ReLU.
+        incremental: Whether to compute incremental EI over the pending points
+            or compute EI of the joint batch improvement (including pending
+            points).
 
     Returns:
         A dict mapping kwarg names of the constructor to values.
     """
+    if cache_root is None:
+        cache_root = supports_cache_root(model)
     return {
         **construct_inputs_qNEI(
             model=model,
@@ -705,6 +712,7 @@ def construct_inputs_qLogNEI(
         "fat": fat,
         "tau_max": tau_max,
         "tau_relu": tau_relu,
+        "incremental": incremental,
     }
 
 
@@ -1758,7 +1766,7 @@ def optimize_objective(
             columns=list(fixed_features.keys()),
             values=list(fixed_features.values()),
         )
-        free_feature_dims = list(range(len(bounds)) - fixed_features.keys())
+        free_feature_dims = list(range(bounds.shape[1]) - fixed_features.keys())
         free_feature_bounds = bounds[:, free_feature_dims]  # (2, d' <= d)
     else:
         free_feature_bounds = bounds
@@ -1775,18 +1783,21 @@ def optimize_objective(
             rhs = -b[i, 0]
             inequality_constraints.append((indices, coefficients, rhs))
 
+    options = {
+        "batch_limit": optimizer_options.get("batch_limit", 8),
+        "maxiter": optimizer_options.get("maxiter", 200),
+        "nonnegative": optimizer_options.get("nonnegative", False),
+    }
+    if "method" in optimizer_options:
+        options["method"] = optimizer_options.pop("method")
+
     return optimize_acqf(
         acq_function=acq_function,
         bounds=free_feature_bounds,
         q=q,
         num_restarts=optimizer_options.get("num_restarts", 60),
         raw_samples=optimizer_options.get("raw_samples", 1024),
-        options={
-            "batch_limit": optimizer_options.get("batch_limit", 8),
-            "maxiter": optimizer_options.get("maxiter", 200),
-            "nonnegative": optimizer_options.get("nonnegative", False),
-            "method": optimizer_options.get("method", "L-BFGS-B"),
-        },
+        options=options,
         inequality_constraints=inequality_constraints,
         fixed_features=None,  # handled inside the acquisition function
         post_processing_func=post_processing_func,

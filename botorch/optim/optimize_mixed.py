@@ -524,10 +524,7 @@ def continuous_step(
         A tuple of two tensors: a (1 x d)-dim tensor of optimized points
             and a (1)-dim tensor of acquisition values.
     """
-    bounds = opt_inputs.bounds
     options = opt_inputs.options or {}
-    if (current_x < bounds[0]).any() or (current_x > bounds[1]).any():
-        raise ValueError("continuous_step requires current_x to be within bounds.")
     if len(discrete_dims) == len(current_x):  # nothing continuous to optimize
         with torch.no_grad():
             return current_x, opt_inputs.acq_function(current_x.unsqueeze(0))
@@ -536,6 +533,7 @@ def continuous_step(
         opt_inputs,
         q=1,
         num_restarts=1,
+        raw_samples=None,
         batch_initial_conditions=current_x.unsqueeze(0),
         fixed_features={
             **dict(zip(discrete_dims.tolist(), current_x[discrete_dims])),

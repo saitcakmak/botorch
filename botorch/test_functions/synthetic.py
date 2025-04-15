@@ -38,6 +38,11 @@ References:
     Optimization with Noisy Experiments. Bayesian Analysis, Bayesian Anal.
     14(2), 495-519, 2019.
 
+.. [Mishra2007]
+    S. K. Mishra. Minimization of Keane's Bump Function by the Repulsive
+    Particle Swarm and the Differential Evolution Methods (May 1, 2007).
+    Available at SSRN: https://ssrn.com/abstract=983836.
+
 .. [Gramacy2016]
     R. Gramacy, G. Gray, S. Le Digabel, H. Lee, P. Ranjan, G. Wells & S. Wild.
     Modeling an Augmented Lagrangian for Blackbox Constrained Optimization,
@@ -150,6 +155,7 @@ class Ackley(SyntheticTestFunction):
             bounds: Custom bounds for the function specified as (lower, upper) pairs.
         """
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(-32.768, 32.768) for _ in range(self.dim)]
         self._optimizers = [tuple(0.0 for _ in range(self.dim))]
@@ -167,6 +173,7 @@ class Ackley(SyntheticTestFunction):
 
 class Beale(SyntheticTestFunction):
     dim = 2
+    continuous_inds = list(range(dim))
     _optimal_value = 0.0
     _bounds = [(-4.5, 4.5), (-4.5, 4.5)]
     _optimizers = [(3.0, 0.5)]
@@ -193,6 +200,7 @@ class Branin(SyntheticTestFunction):
     """
 
     dim = 2
+    continuous_inds = list(range(dim))
     _bounds = [(-5.0, 10.0), (0.0, 15.0)]
     _optimal_value = 0.397887
     _optimizers = [(-math.pi, 12.275), (math.pi, 2.275), (9.42478, 2.475)]
@@ -210,6 +218,7 @@ class Branin(SyntheticTestFunction):
 
 class Bukin(SyntheticTestFunction):
     dim = 2
+    continuous_inds = list(range(dim))
     _bounds = [(-15.0, -5.0), (-3.0, 3.0)]
     _optimal_value = 0.0
     _optimizers = [(-10.0, 1.0)]
@@ -233,6 +242,7 @@ class Cosine8(SyntheticTestFunction):
     """
 
     dim = 8
+    continuous_inds = list(range(dim))
     _bounds = [(-1.0, 1.0) for _ in range(8)]
     _optimal_value = 0.8
     _optimizers = [tuple(0.0 for _ in range(8))]
@@ -243,6 +253,7 @@ class Cosine8(SyntheticTestFunction):
 
 class DropWave(SyntheticTestFunction):
     dim = 2
+    continuous_inds = list(range(dim))
     _bounds = [(-5.12, 5.12), (-5.12, 5.12)]
     _optimal_value = -1.0
     _optimizers = [(0.0, 0.0)]
@@ -274,6 +285,7 @@ class DixonPrice(SyntheticTestFunction):
             dtype: The dtype that is used for the bounds of the function.
         """
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(-10.0, 10.0) for _ in range(self.dim)]
         self._optimizers = [
@@ -303,6 +315,7 @@ class EggHolder(SyntheticTestFunction):
     """
 
     dim = 2
+    continuous_inds = list(range(dim))
     _bounds = [(-512.0, 512.0), (-512.0, 512.0)]
     _optimal_value = -959.6407
     _optimizers = [(512.0, 404.2319)]
@@ -346,6 +359,7 @@ class Griewank(SyntheticTestFunction):
             dtype: The dtype that is used for the bounds of the function.
         """
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(-600.0, 600.0) for _ in range(self.dim)]
         self._optimizers = [tuple(0.0 for _ in range(self.dim))]
@@ -392,6 +406,7 @@ class Hartmann(SyntheticTestFunction):
         if dim not in (3, 4, 6):
             raise ValueError(f"Hartmann with dim {dim} not defined")
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(0.0, 1.0) for _ in range(self.dim)]
         # optimizers and optimal values for dim=4 not implemented
@@ -476,6 +491,7 @@ class HolderTable(SyntheticTestFunction):
     """
 
     dim = 2
+    continuous_inds = list(range(dim))
     _bounds = [(-10.0, 10.0), (-10.0, 10.0)]
     _optimal_value = -19.2085
     _optimizers = [
@@ -526,6 +542,7 @@ class Levy(SyntheticTestFunction):
             dtype: The dtype that is used for the bounds of the function.
         """
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(-10.0, 10.0) for _ in range(self.dim)]
         self._optimizers = [tuple(1.0 for _ in range(self.dim))]
@@ -569,6 +586,7 @@ class Michalewicz(SyntheticTestFunction):
             bounds: Custom bounds for the function specified as (lower, upper) pairs.
         """
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(0.0, math.pi) for _ in range(self.dim)]
         optvals = {2: -1.80130341, 5: -4.687658, 10: -9.66015}
@@ -631,6 +649,7 @@ class Powell(SyntheticTestFunction):
             dtype: The dtype that is used for the bounds of the function.
         """
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(-4.0, 5.0) for _ in range(self.dim)]
         self._optimizers = [tuple(0.0 for _ in range(self.dim))]
@@ -668,6 +687,7 @@ class Rastrigin(SyntheticTestFunction):
             dtype: The dtype that is used for the bounds of the function.
         """
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(-5.12, 5.12) for _ in range(self.dim)]
         self._optimizers = [tuple(0.0 for _ in range(self.dim))]
@@ -709,6 +729,7 @@ class Rosenbrock(SyntheticTestFunction):
             dtype: The dtype that is used for the bounds of the function.
         """
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(-5.0, 10.0) for _ in range(self.dim)]
         self._optimizers = [tuple(1.0 for _ in range(self.dim))]
@@ -733,6 +754,7 @@ class Shekel(SyntheticTestFunction):
     """
 
     dim = 4
+    continuous_inds = list(range(dim))
     _bounds = [(0.0, 10.0), (0.0, 10.0), (0.0, 10.0), (0.0, 10.0)]
     _optimizers = [(4.000747, 3.99951, 4.00075, 3.99951)]
 
@@ -780,6 +802,7 @@ class Shekel(SyntheticTestFunction):
 
 class SixHumpCamel(SyntheticTestFunction):
     dim = 2
+    continuous_inds = list(range(dim))
     _bounds = [(-3.0, 3.0), (-2.0, 2.0)]
     _optimal_value = -1.0316
     _optimizers = [(0.0898, -0.7126), (-0.0898, 0.7126)]
@@ -820,6 +843,7 @@ class StyblinskiTang(SyntheticTestFunction):
             dtype: The dtype that is used for the bounds of the function.
         """
         self.dim = dim
+        self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(-5.0, 5.0) for _ in range(self.dim)]
         self._optimal_value = -39.166166 * self.dim
@@ -832,6 +856,7 @@ class StyblinskiTang(SyntheticTestFunction):
 
 class ThreeHumpCamel(SyntheticTestFunction):
     dim = 2
+    continuous_inds = list(range(dim))
     _bounds = [(-5.0, 5.0), (-5.0, 5.0)]
     _optimal_value = 0.0
     _optimizers = [(0.0, 0.0)]
@@ -914,6 +939,7 @@ class ConstrainedGramacy(ConstrainedSyntheticTestFunction):
     num_objectives = 1
     num_constraints = 2
     dim = 2
+    continuous_inds = list(range(dim))
     _bounds = [(0.0, 1.0), (0.0, 1.0)]
     _optimizers = [(0.1954, 0.4044)]
     _optimal_value = 0.5998  # approximate from [Gramacy2016]_
@@ -1033,8 +1059,10 @@ class PressureVessel(ConstrainedSyntheticTestFunction):
     """
 
     dim = 4
+    continuous_inds = list(range(dim))
     num_constraints = 4
     _bounds = [(0.0, 10.0), (0.0, 10.0), (10.0, 50.0), (150.0, 200.0)]
+    _optimal_value = 6059.946341  # from [CoelloCoello2002constraint]
 
     def evaluate_true(self, X: Tensor) -> Tensor:
         x1, x2, x3, x4 = X.unbind(-1)
@@ -1071,8 +1099,10 @@ class WeldedBeamSO(ConstrainedSyntheticTestFunction):
     """
 
     dim = 4
+    continuous_inds = list(range(dim))
     num_constraints = 6
     _bounds = [(0.125, 10.0), (0.1, 10.0), (0.1, 10.0), (0.1, 10.0)]
+    _optimal_value = 1.728226  # from [CoelloCoello2002constraint]
 
     def evaluate_true(self, X: Tensor) -> Tensor:
         x1, x2, x3, x4 = X.unbind(-1)
@@ -1124,8 +1154,10 @@ class TensionCompressionString(ConstrainedSyntheticTestFunction):
     """
 
     dim = 3
+    continuous_inds = list(range(dim))
     num_constraints = 4
     _bounds = [(0.01, 1.0), (0.01, 1.0), (0.01, 20.0)]
+    _optimal_value = 0.012681  # from [CoelloCoello2002constraint]
 
     def evaluate_true(self, X: Tensor) -> Tensor:
         x1, x2, x3 = X.unbind(-1)
@@ -1155,6 +1187,7 @@ class SpeedReducer(ConstrainedSyntheticTestFunction):
     """
 
     dim = 7
+    continuous_inds = list(range(dim))
     num_constraints = 11
     _bounds = [
         (2.6, 3.6),
@@ -1165,6 +1198,7 @@ class SpeedReducer(ConstrainedSyntheticTestFunction):
         (2.9, 3.9),
         (5.0, 5.5),
     ]
+    _optimal_value = 2996.3482  # from [Lemonge2010constrained]
 
     def evaluate_true(self, X: Tensor) -> Tensor:
         x1, x2, x3, x4, x5, x6, x7 = X.unbind(-1)
@@ -1196,6 +1230,81 @@ class SpeedReducer(ConstrainedSyntheticTestFunction):
                 x1 / x2 - 12,
                 (1.5 * x6 + 1.9) / x4 - 1,
                 (1.1 * x7 + 1.9) / x5 - 1,
+            ],
+            dim=-1,
+        )
+
+
+class KeaneBumpFunction(ConstrainedSyntheticTestFunction):
+    r"""Keane Bump Function problem with constraints.
+
+    This is a challenging d-dimensional minimization problem with two
+    constraints that is evaluated on the domain [0, 10]^d.
+
+    There is no known global optimum for this problem, but the aproximate
+    global optimal value for a few different dimensionalities can be found in
+    [Mishra2007]_.
+    """
+
+    num_constraints = 2
+    _optimal_value_lookup = {
+        2: -0.365,
+        10: -0.6737,
+        15: -0.781647601,
+        20: -0.803619104,
+        30: -0.818056222,
+        40: -0.826624404,
+        50: -0.83078783,
+    }
+
+    def __init__(
+        self,
+        dim: int,
+        noise_std: None | float = None,
+        constraint_noise_std: None | float | list[float] = None,
+        negate: bool = False,
+        bounds: list[tuple[float, float]] | None = None,
+        dtype: torch.dtype = torch.double,
+    ) -> None:
+        r"""
+        Args:
+            dim: The (input) dimension.
+            noise_std: Standard deviation of the observation noise.
+            constraint_noise_std: Standard deviation of the constraint noise.
+                If a list is provided, specifies separate noise standard
+                deviations for each constraint.
+            negate: If True, negate the function.
+            bounds: Custom bounds for the function specified as (lower, upper) pairs.
+            dtype: The dtype that is used for the bounds of the function.
+        """
+        self.dim = dim
+        self.continuous_inds = list(range(dim))
+        if bounds is None:
+            bounds = [(0.0, 10.0) for _ in range(dim)]
+        if dim in self._optimal_value_lookup.keys():
+            self._optimal_value = self._optimal_value_lookup[dim]
+        super().__init__(
+            noise_std=noise_std,
+            constraint_noise_std=constraint_noise_std,
+            negate=negate,
+            bounds=bounds,
+            dtype=dtype,
+        )
+
+    def evaluate_true(self, X: Tensor) -> Tensor:
+        Xcos = X.cos()
+        num = Xcos.pow(4).sum(dim=-1) - 2 * Xcos.pow(2).prod(dim=-1)
+        den = torch.sqrt(
+            (torch.arange(1, self.dim + 1, device=X.device) * X.pow(2)).sum(dim=-1)
+        )
+        # clamp to avoid den=0, which happens when X=0.
+        return -(num / den.clamp(min=1e-3)).abs()
+
+    def evaluate_slack_true(self, X: Tensor) -> Tensor:
+        return torch.cat(
+            [
+                X.prod(dim=-1, keepdims=True) - 0.75,
+                7.5 * self.dim - X.sum(dim=-1, keepdims=True),
             ],
             dim=-1,
         )
