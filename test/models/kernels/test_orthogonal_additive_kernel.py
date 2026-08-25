@@ -34,6 +34,7 @@ class TestOrthogonalAdditiveKernel(BotorchTestCase):
         self._test_non_reduced_forward()
         self._test_non_reduced_forward_batch_shape()
         self._test_normalizer_preserves_eval_mode()
+        self._test_repeated_backward_through_eval_kernel()
         self._test_component_indices()
 
     def _test_kernel(self):
@@ -571,6 +572,43 @@ class TestOrthogonalAdditiveKernel(BotorchTestCase):
         norm1 = oak.normalizer()
         norm2 = oak.normalizer()
         self.assertIs(norm1, norm2)
+
+        # The cached normalizer must not hold an autograd graph -- it outlives the
+        # graph of the call that populated it.
+        self.assertIsNone(norm1.grad_fn)
+
+        # Switching back to training must invalidate the eval cache so that a
+        # subsequent eval uses the updated kernel hyperparameters.
+        oak.train()
+        oak.base_kernel.lengthscale = 0.2
+        expected_normalizer = oak.normalizer().detach()
+        oak.eval()
+        updated_normalizer = oak.normalizer()
+        self.assertIsNot(norm1, updated_normalizer)
+        self.assertAllClose(updated_normalizer, expected_normalizer)
+
+    def _test_repeated_backward_through_eval_kernel(self):
+        """Repeated `backward()` calls w.r.t. the inputs of a fitted OAK model."""
+        tkwargs = {"dtype": torch.double, "device": self.device}
+        d = 3
+        train_X = torch.rand(8, d, **tkwargs)
+        train_Y = train_X.sum(dim=-1, keepdim=True)
+        model = SingleTaskGP(
+            train_X=train_X,
+            train_Y=train_Y,
+            covar_module=OrthogonalAdditiveKernel(dim=d, **tkwargs),
+        )
+        # Fitting leaves `normalizer()` having been called in train mode, whose
+        # autograd graph is freed by the fitting backward passes.
+        fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))
+        model.eval()
+
+        # Each iteration builds and frees its own graph, as batched sensitivity
+        # analysis does.
+        for _ in range(3):
+            X = torch.rand(4, d, **tkwargs).requires_grad_(True)
+            model.posterior(X).mean.sum().backward()
+            self.assertIsNotNone(X.grad)
 
     def _test_component_indices(self):
         """Test component_indices property returns correct mappings."""

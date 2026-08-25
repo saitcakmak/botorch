@@ -552,21 +552,47 @@ class OrthogonalAdditiveKernel(Kernel):
         Returns:
             A ``(*batch_shape, d, 1, 1)``-dim tensor of normalization constants.
         """
-        if self.training or getattr(self, "_normalizer", None) is None:
-            # Computes w.T @ K @ w for each dimension d.
-            # The ... handles any batch dimensions from the base kernel.
-            w = self.w.squeeze(-1)  # (q, 1) -> (q,)
-            normalizer = torch.einsum(
-                w,
-                [0],
-                self.k(self.z, self.z),
-                [..., 2, 0, 1],
-                w,
-                [1],
-                [..., 2],
-            ).clamp(eps)  # (*batch_shape, d)
-            self._normalizer = normalizer[..., None, None]
+        if self.training:
+            # Recompute on every call, and deliberately do not populate the cache:
+            # a train-mode normalizer is attached to the training iteration's
+            # autograd graph, which `backward()` frees. Caching it would hand that
+            # dead graph to eval-mode callers.
+            return self._compute_normalizer(eps=eps)
+        if getattr(self, "_normalizer", None) is None:
+            # Detach before caching: the cache outlives the autograd graph of the
+            # call that populated it, so keeping it attached makes any subsequent
+            # `backward()` through the kernel fail with "Trying to backward through
+            # the graph a second time". Hyperparameters are fixed in eval mode, so
+            # gradients w.r.t. them are not needed here.
+            with torch.no_grad():
+                self._normalizer = self._compute_normalizer(eps=eps)
         return self._normalizer
+
+    def _clear_cache(self) -> None:
+        if hasattr(self, "_normalizer"):
+            del self._normalizer
+
+    def _compute_normalizer(self, eps: float = 1e-6) -> Tensor:
+        """Computes ``w.T @ K @ w`` for each dimension ``d``.
+
+        Args:
+            eps: Minimum value constraint on the normalizers. Avoids division by zero.
+
+        Returns:
+            A ``(*batch_shape, d, 1, 1)``-dim tensor of normalization constants.
+        """
+        # The ... handles any batch dimensions from the base kernel.
+        w = self.w.squeeze(-1)  # (q, 1) -> (q,)
+        normalizer = torch.einsum(
+            w,
+            [0],
+            self.k(self.z, self.z),
+            [..., 2, 0, 1],
+            w,
+            [1],
+            [..., 2],
+        ).clamp(eps)  # (*batch_shape, d)
+        return normalizer[..., None, None]
 
 
 def leggauss(
