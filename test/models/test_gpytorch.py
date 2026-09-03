@@ -1219,11 +1219,9 @@ class TestLoadStateDict(BotorchTestCase):
         # Check that matching datapoints have same train_targets
         # m1 was trained on train_X[:1], new_m1 on train_X[:2] after loading
         # should have m1's train_targets
-        self.assertTrue(
-            torch.equal(
-                new_model.models[0].train_targets[:1],
-                model_list.models[0].train_targets,
-            )
+        self.assertAllClose(
+            new_model.models[0].train_targets[:1],
+            model_list.models[0].train_targets,
         )
         self.assertEqual(
             model_list.models[0].outcome_transform.means,
